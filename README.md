@@ -16,7 +16,6 @@ Comparing event-driven and continuous change detection on plant growth time-laps
 * **Detectors:** continuous (every frame) versus adaptive EMA threshold with 32x32 pre-check
 * **Result:** 91.5% of frames skipped, 22.2% compute time saved, 70% detection agreement on top-20 events
 * **Main finding:** the pre-check overhead in Python closes the gap between skip rate and actual time saved; on dedicated hardware that gap largely disappears
-* **Time spent:** one day
 
 Built to get comfortable with time-lapse image pipelines before applying to a project on event-driven plant sensing.
 
