@@ -1,0 +1,11 @@
+opencv-python>=4.8.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+imageio>=2.31.0
+imageio[ffmpeg]
+Pillow>=10.0.0
+scipy>=1.11.0
+scikit-learn>=1.3.0
+tqdm>=4.65.0
+nbformat>=5.9.0
+jupyter>=1.0.0
