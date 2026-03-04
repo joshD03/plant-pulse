@@ -1,125 +1,183 @@
 # plant-pulse
 
-Event-driven vs continuous change detection in plant growth time-lapses.
+Comparing event-driven and continuous change detection on plant growth time-lapses, with a focus on compute efficiency.
 
----
+***
 
-## Why
+![Threshold GIF](results/figures/threshold.gif)
+*Adaptive threshold (orange) tracking baseline variation against the raw continuous score (blue). Red markers show when the event-driven detector triggered. The stress event at frames 80 to 90 produces a clear spike above the baseline.*
 
-Controlled-environment agriculture relies almost entirely on continuous imaging to monitor crops. Most of that computation runs on frames where nothing meaningful has changed, wasting energy at scale. This project asks a precise question: can an adaptive event-driven trigger match the detection performance of continuous sensing while dramatically reducing the compute budget?
+***
 
----
+## Summary
 
-## The core idea
+* **Goal:** compare event-driven versus continuous change detection on plant time-lapse imagery
+* **Dataset:** 200 synthetic frames (lettuce-style growth, injected stress event at frames 80 to 90)
+* **Detectors:** continuous (every frame) versus adaptive EMA threshold with 32x32 pre-check
+* **Result:** 91.5% of frames skipped, 22.2% compute time saved, 70% detection agreement on top-20 events
+* **Main finding:** the pre-check overhead in Python closes the gap between skip rate and actual time saved; on dedicated hardware that gap largely disappears
+* **Time spent:** one day
 
-Rather than processing every frame, the detector maintains a slowly-adapting baseline of normal background variation using an exponential moving average. Full computation only fires when a cheap 32×32 pre-check exceeds a sensitivity threshold above that baseline. This means the system tracks slow physiological changes like steady growth without treating them as events, while remaining sensitive to acute deviations like sudden stress responses — without storing a long history of the plant in memory.
+Built to get comfortable with time-lapse image pipelines before applying to a project on event-driven plant sensing.
 
-The key parameter is `alpha`, which controls how quickly the threshold adapts:
-- High alpha (e.g. 0.95): slow adaptation — catches acute stress deviations from a stable baseline
-- Low alpha (e.g. 0.70): fast adaptation — better at tracking rapid seasonal or environmental drift
+***
 
----
+## Motivation
 
-## Results
+Most automated plant monitoring systems rely on continuous imaging, which is energy-intensive and difficult to scale. The question here is whether a system can let plant behaviour itself trigger sensing and computation, rather than running constantly regardless of whether anything has changed.
 
-Pipeline run on 200 synthetic frames (199 frame pairs). Synthetic dataset simulates:
-- Steady plant growth (+0.3px radius/frame)
-- Per-frame Gaussian noise and LED illumination flicker
-- Small random camera translations (±2px) simulating fan vibration
-- Injected stress event at frames 80–90 (sudden darkening of plant region) for ground-truth validation
+I was specifically interested in one problem: how do you separate a slow, gradual change like steady growth from an acute event like a stress response, without storing a long history of the plant in memory? The adaptive threshold is my attempt at that.
 
----
+I had not worked with image or time-lapse data before this. I wanted to build the preprocessing pipeline from scratch (illumination correction, frame registration, noise suppression) rather than starting from a clean dataset, because that is where most of the work actually is.
 
-### Adaptive threshold separating slow growth from acute events
-![Threshold tracking](results/figures/threshold.gif)
+***
 
-Blue: raw per-frame change score from continuous sensing. Orange: adaptive threshold tracking baseline variation. Red markers: frames where the event-driven detector triggered. The threshold correctly tracks gradual background drift without suppressing the genuine stress event at frames 80–90. Change scores remain in the 0.0–0.35 range across the full sequence, with the stress event producing a clear spike above the adaptive baseline.
+## Results at a glance
 
----
+* Frames skipped: **91.5%** (182 of 199 frame pairs)
+* Compute time saved: **22.2%** (11.27 ms continuous vs 8.76 ms event-driven)
+* Detection agreement (top-20 events): **70%** (14 of 20 events matched)
+* False triggers: **3 of 17** triggered frames (17.6%)
+* Worst false trigger score: **0.0914**
+* Ground truth stress event (frames 80 to 90): detected
 
-### Cumulative change heatmap across the full time-lapse
-![Change heatmap](results/figures/heatmap.gif)
+***
 
-Pixel-level accumulation of detected change over all 199 frame pairs. Hot regions (orange-red) show where biological activity concentrated spatially over the growth period. Cool regions (blue) are stable background. The heatmap builds from zero, making the plant’s growth trajectory visible as a physical record rather than a scalar metric.
+## GIFs
 
----
+### Adaptive threshold tracking
+![Threshold GIF](results/figures/threshold.gif)
 
-### False trigger vs true trigger anatomy
-![False trigger anatomy](results/figures/false_triggers.gif)
+The threshold adapts slowly upward as the plant grows, tracking the gradual increase in baseline frame-to-frame difference without treating it as an event. The stress event at frames 80 to 90 pushes the raw score well above the threshold and triggers correctly. Change scores stay between 0.0 and 0.35 across the full sequence.
 
-The detector does not always fire for the right reason. The worst false trigger recorded a full change score of **0.0914** — the cheap 32×32 pre-check fired, but full-resolution processing found minimal real biological change, consistent with camera vibration or illumination flicker. 3 of the 17 triggered frames (17.6%) were false triggers. The clip contrasts this directly against the strongest true trigger (the injected stress event at frames 80–90).
+### Cumulative change heatmap
+![Heatmap GIF](results/figures/heatmap.gif)
 
----
+Per-pixel accumulation of detected change across all 199 frame pairs. The plant growth region accumulates most of the change (orange-red), while the background stays cold (blue). Watching it build frame by frame makes the spatial pattern of biological activity visible in a way a single frame cannot.
 
-## Key numbers
+### False trigger vs true trigger
+![False trigger GIF](results/figures/false_triggers.gif)
 
-| Metric | Value |
-|---|---|
-| Total frame pairs | 199 |
-| Event-driven triggered | 17 frames (8.5%) |
-| Frames skipped | 91.5% |
-| Continuous compute time | 11.27 ms |
-| Event-driven compute time | 8.76 ms |
-| Compute time saved | 22.2% |
-| Detection agreement (top-20 events) | 70.0% |
-| False triggers | 3 of 17 triggered (17.6%) |
-| Worst false trigger score | 0.0914 |
+The worst false trigger scored 0.0914. The 32x32 pre-check fired, but full-resolution processing found very little real change. Most likely camera vibration or a brief illumination flicker. Shown back to back with the strongest true trigger (the injected stress event) to make the contrast clear.
 
-**On the compute savings gap:** The event-driven detector skipped 91.5% of frames but only saved 22.2% of compute time. This is expected and analytically interesting: the cheap 32×32 pre-check still runs on every frame, so skipped frames are not free — they carry the overhead of the downsampled difference and threshold comparison. On a real embedded system where the pre-check runs in hardware, this overhead would be negligible and the savings would approach the skip rate. The gap between skip rate and compute savings is therefore a direct measure of the pre-check overhead cost, and a useful design target for hardware implementation.
+***
 
-**On detection agreement:** 70% agreement on the top-20 events means the event-driven detector caught 14 of the 20 highest-change moments identified by continuous sensing. The 6 missed events are the next priority: inspecting them would show whether they were genuinely low-magnitude biological events that the adaptive threshold smoothed over, or artefacts (noise, vibration) that continuous sensing flagged but should not have.
+## How it works
 
----
+### Preprocessing
+
+Three steps before either detector runs:
+
+1. **CLAHE** on the L channel of each frame (LAB colour space) to correct for LED illumination drift across sessions
+2. **ORB-based registration** to frame 0, correcting small camera translations using feature matching and a homography
+3. **Gaussian blur** (5x5) to suppress high-frequency sensor noise before differencing
+
+These are the three main sources of spurious frame-to-frame variation in a typical growth chamber setup. If any of them are left uncorrected, the detectors produce false triggers constantly.
+
+### Continuous detector
+
+Absolute pixel difference on every frame pair, threshold at intensity 15, change score as fraction of pixels above threshold. Processes all 199 pairs.
+
+### Event-driven detector
+
+A cheap 32x32 downsampled difference runs on every frame pair. The full pipeline only runs when that score exceeds `sensitivity * adaptive_threshold`.
+
+The adaptive threshold updates as:
+
+```
+threshold(t) = alpha * threshold(t-1) + (1 - alpha) * cheap_score(t)
+```
+
+Initialised from the mean of the first 10 frame pairs. With alpha = 0.95, the threshold adapts slowly enough to track steady growth without masking genuine events, but fast enough to re-stabilise after the stress event passes.
+
+***
+
+## Discussion
+
+### On the compute savings gap
+
+91.5% of frames were skipped but only 22.2% of compute time was saved. This is because the 32x32 pre-check still runs on every frame in Python, so skipped frames are not free. On a real embedded or FPGA implementation the pre-check cost is negligible and savings would track the skip rate much more closely. The gap is a software prototype artefact rather than a fundamental property of the approach.
+
+### On detection agreement
+
+70% agreement on the top-20 events means 6 events were caught by continuous sensing but missed by event-driven. The next step would be to inspect those 6 frames individually and check whether they were genuine biological events that the threshold smoothed over, or high-noise frames that continuous sensing incorrectly ranked as significant. That distinction matters a lot for calibrating alpha and sensitivity on a real dataset.
+
+### On false triggers
+
+3 false triggers out of 17 total is a 17.6% false positive rate. Per-region masking (processing only the plant pixels rather than the full frame) would be the most straightforward way to reduce this, since most false triggers came from background motion at the frame edges.
+
+***
 
 ## Limitations
 
-- The adaptive threshold assumes stationarity in background variation. Sudden lighting changes (e.g. LED spectrum switching) cause burst false triggers until the threshold re-adapts, as visible in the false trigger GIF.
-- The 32×32 pre-check discards spatial resolution. Biologically significant but spatially small changes (e.g. single stomatal responses) will be missed entirely by the pre-check and never reach full processing.
-- This prototype processes the full frame as a single region. Per-plant region-of-interest masking would substantially reduce the 17.6% false trigger rate on multi-plant trays.
-- The compute savings gap (91.5% frames skipped vs 22.2% time saved) reflects pre-check overhead running in Python. On dedicated edge hardware, pre-check cost approaches zero and savings would track the skip rate directly.
-- Extending to Arabidopsis specifically would require calibration of `alpha` and `sensitivity` against ground-truth stress annotations for that organism’s growth dynamics.
+* The adaptive threshold breaks after a sudden lighting change (for example an LED spectrum switch). It produces burst false triggers until the baseline re-adapts.
+* The 32x32 pre-check loses spatial detail. Small but biologically significant changes may never trigger full processing.
+* The whole frame is treated as a single region. Any background motion contributes to the pre-check score.
+* The synthetic dataset uses a circle growing at a fixed rate. Real plant growth has pauses, asymmetric expansion, and leaf overlap, which would stress the threshold in different ways.
+* Extending this to Arabidopsis would need calibration of alpha and sensitivity against ground-truth stress annotations, since its growth dynamics are quite different from lettuce.
 
----
+***
 
 ## Dataset
 
-This project uses the **KOMATSUNA dataset** — lettuce time-lapse imagery from Kyushu University, used in peer-reviewed plant phenotyping research.
+Targeted at the **KOMATSUNA dataset** (Kyushu University, lettuce time-lapse imagery, used in published plant phenotyping work).
 
 > Uchiyama, H. et al. *Easy Accessibility to KOMATSUNA Dataset.* ICCV Workshop on Computer Vision Problems in Plant Phenotyping, 2017.
-> Download: http://limu.ait.kyushu-u.ac.jp/dataset/en/
+> http://limu.ait.kyushu-u.ac.jp/dataset/en/
 
-If the dataset is unavailable, `generate_synthetic_data.py` creates 200 synthetic frames with a growing plant, illumination flicker, camera vibration, and an injected stress event at frames 80–90 for detection validation. All results above were produced using this synthetic dataset.
+All results here used synthetic data generated by `generate_synthetic_data.py`. The synthetic frames simulate growth, noise, illumination flicker, camera vibration, and an injected stress event at frames 80 to 90 as a ground truth validation target.
 
----
+***
 
-## Run it
+## Repository structure
+
+```text
+plant-pulse/
+README.md
+requirements.txt
+generate_synthetic_data.py
+run_pipeline.py
+generate_gifs.py
+src/
+  preprocessing.py
+  continuous.py
+  event_driven.py
+  metrics.py
+data/
+  komatsuna/        (not committed, add your own frames here)
+  preprocessed/     (generated by run_pipeline.py)
+results/
+  figures/          (GIF outputs)
+```
+
+***
+
+## Usage
 
 ```bash
 git clone https://github.com/joshD03/plant-pulse
 cd plant-pulse
 pip install -r requirements.txt
 
-# No dataset needed — synthetic data is generated automatically
-python run_pipeline.py
-
-# Generate all three GIFs
-python generate_gifs.py
+python run_pipeline.py      # generates synthetic data automatically if data/komatsuna/ is empty
+python generate_gifs.py     # produces all three GIFs into results/figures/
 ```
 
----
+***
 
-## Structure
+## Dependencies
 
-```
-plant-pulse/
-├── src/
-│   ├── preprocessing.py     # CLAHE illumination correction, ORB registration, Gaussian blur
-│   ├── continuous.py        # Baseline: process every frame pair
-│   ├── event_driven.py      # Adaptive EMA threshold trigger with cheap 32x32 pre-check
-│   └── metrics.py           # Savings, detection agreement, false trigger analysis
-├── generate_synthetic_data.py   # Fallback dataset with injected stress event
-├── run_pipeline.py              # End-to-end pipeline with printed summary
-├── generate_gifs.py             # Produces all three analytical GIFs
-├── requirements.txt
-└── results/figures/             # GIF outputs
-```
+* opencv-python
+* numpy
+* matplotlib
+* imageio
+* Pillow
+* scipy
+* scikit-learn
+* tqdm
+
+***
+
+## License
+
+MIT.
